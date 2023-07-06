@@ -23,6 +23,8 @@ from docutils.writers.html4css1 import Writer, HTMLTranslator
 
 from pelican import signals
 
+from .abbr_state import AbbrState
+
 # based on https://stackoverflow.com/a/49047197
 class HTMLFragmentTranslator(HTMLTranslator):
     # prevent single paragraphs from being wrapped in <p> tags
@@ -157,6 +159,7 @@ def ed_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     del_text, ins_text = map(esc, text.split(delim))
     html  = '<span class="subst">'
     html += f'<del>{del_text}</del>'
+    html += f'<span class="invis"> </span>'
     html += f'<ins>{ins_text}</ins>'
     html += '</span>'
 
@@ -165,6 +168,10 @@ def ed_role(name, rawtext, text, lineno, inliner, options=None, content=None):
 def a_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     options = options if options is not None else {}
     content = content if content is not None else []
+
+    m = re.search(r"id\s*=\s*([A-Za-z0-9-]+)", text)
+    if m is not None:
+        return html_raw(html_element('a', id=m.group(1)) + '</a>')
 
     # (.+?)     capture (group 1 - link text) non-greedy match of anything
     # \s*       zero or more whitespace characters
@@ -241,6 +248,33 @@ def wiki_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     html = html_element('a', text, href=url, class_=['reference', 'external'])
     return html_raw(html)
 
+def abbr_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+    options = options if options is not None else {}
+    content = content if content is not None else []
+
+    src = inliner.document.attributes['source']
+
+    m = re.search(r'^(.+)\s+\((.+)\)$', text)
+    if not m or not m.group(2):
+        abbr = AbbrState.get(src, text)
+        if abbr is None:
+            raise ValueError("Invalid abbr role text: " + text)
+    else:
+        (text, title) = m.group(1, 2)
+        if len(text) > len(title):
+            (text, title) = (title, text)
+        abbr = AbbrState.get(src, text, title)
+
+    if abbr['count'] == 0:
+        # we need to wrap the abbr to create an unstyled title with ::after
+        html = ('<span class="abbr" data-title="{title}">'+\
+                '<abbr title="{title}">{abbr}</abbr>'+\
+                '</span>').format(**abbr)
+    else:
+        html = '<abbr title="{title}">{abbr}</abbr>'.format(**abbr)
+
+    return html_raw(html)
+
 def register_roles():
     module = sys.modules[__name__]
     for name in filter(lambda x: x.endswith('_role'), dir(module)):
@@ -262,7 +296,8 @@ def register_roles():
     }
 
     for name, tag in tag_roles.items():
-        func = lambda a, b, text, *c: (html_raw(f'<{tag}>{esc(text)}</{tag}>'))
+        # the tag name needs to be passed into a closure...
+        func = (lambda t: lambda *a: html_raw(f'<{t}>{esc(a[2])}</{t}>'))(tag)
         roles.register_local_role(name, func)
 
 def register_directives(instance):
