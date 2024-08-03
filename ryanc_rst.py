@@ -149,6 +149,68 @@ def ord_role(name, rawtext, text, lineno, inliner, options=None, content=None):
 
     return html_raw(f'{esc(text)}<sup>{suffix}</sup>')
 
+def cc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+    text = text.replace('\n', ' ')
+    options = options if options is not None else {}
+    content = content if content is not None else []
+
+    m = re.search(
+        r'''
+        ^
+        (.+?)
+        (\s+https?://\S+)?
+        \s+by\s+
+        (.+?)
+        (\s+https?://\S+)?
+        \s+([^:]+?)\s+
+        cc
+        (\s*0|\s+[a-z+-]+)
+        \s+
+        (\d+[.]\d+)
+        $
+        ''',
+        text,
+        re.VERBOSE
+    )
+
+    if not m:
+        raise ValueError("Invalid cc role text: " + text)
+
+    groups = list(map(lambda x: x and x.strip(), m.groups()))
+    #print(list(map(lambda x: repr(x), groups)), file=sys.stderr)
+
+    html = []
+
+    (variant, version) = groups[-2:]
+    variant_tags = sorted(variant.lstrip().lower().split('-'))
+    variant = '-'.join(variant_tags)
+    version = version.lstrip()
+
+    if groups[1]: html.append(f'<a href="{groups[1]}">{groups[0]}</a>')
+    else:         html.append(f'{groups[0]}')
+
+    html.append('by')
+
+    if groups[3]: html.append(f'<a href="{groups[3]}">{groups[2]}</a>')
+    else:         html.append(f'{groups[2]}')
+
+    html.append(groups[4])
+
+    if variant in ('0', 'zero'):
+        variant = 'zero'
+        display = f'CC0 {version}'
+        url = f'https://creativecommons.org/publicdomain/zero/{version}/'
+    else:
+        if version == '1.0':
+            variant = re.sub(r'\bnc-nd\b', variant, 'nd-nc')
+        display = f'CC {variant.upper()} {version}'
+        url = f'https://creativecommons.org/licenses/{variant}/{version}/'
+
+    html.append(f'<a href="{url}">{display}</a>')
+    print(html, file=sys.stderr)
+
+    return html_raw(' '.join(html))
+
 def ed_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     options = options if options is not None else {}
     content = content if content is not None else []
@@ -242,6 +304,7 @@ def wiki_role(name, rawtext, text, lineno, inliner, options=None, content=None):
     # maybe need https://stackoverflow.com/a/32232764
     page = page[0].upper() + page[1:]
     page = page.replace(' ', '_')
+    if page.endswith('’s'): page = page[:-2]
     page = page.replace('’', "'")
     url = url_base + quote(page, safe='()#')
 
@@ -283,16 +346,9 @@ def register_roles():
             roles.register_local_role(name[:-5], func)
 
     tag_roles = {
-        'bold':   'b',
-        'italic': 'i',
-        'strike': 's',
-        'ul':     'u',
-        'mark':   'mark',
-        'var':    'var',
-        'ins':    'ins',
-        'del':    'del',
-        'kbd':    'kbd',
-        'samp':   'samp',
+        'bold': 'b', 'italic': 'i', 'strike': 's', 'ul': 'u',
+        'mark': 'mark', 'ins': 'ins', 'del': 'del',
+        'samp': 'samp', 'kbd': 'kbd', 'var': 'var',
     }
 
     for name, tag in tag_roles.items():
@@ -350,6 +406,18 @@ def register_directives(instance):
 
             return self.html_wrap(head, tail)
 
+    class Picture(_Directive):
+        has_content = True
+        required_arguments = 1
+        optional_arguments = 0
+        final_argument_whitespace = True
+        option_spec = {
+            'alt': directives.unchanged,
+            'title': directives.unchanged,
+            'href': directives.unchanged,
+            'class': directives.class_option,
+        }
+
     class Details(_Directive):
         has_content = True
         required_arguments = 1
@@ -388,7 +456,7 @@ def register_directives(instance):
         def run(self):
             text = self.text_content()
 
-            args_common = ['terser', '--safari10', '--ecma', '5']
+            args_common = ['terser', '--ecma', '5']
             args_pass1 = args_common + [
                 '--compress', 'passes=2', '--mangle', 'reserved=_',
                 '--mangle-props', 'regex=/^_.+/'
